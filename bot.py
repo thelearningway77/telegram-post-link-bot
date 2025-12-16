@@ -1,7 +1,7 @@
 import os
-import asyncio
 import random
 import string
+import asyncio
 
 from pyrogram import Client, filters, idle
 from pyrogram.types import Message
@@ -19,7 +19,9 @@ POST_MAP = {}   # code -> (chat_id, message_id)
 
 # ================== HELPERS ==================
 def generate_code(length=8):
-    return "".join(random.choices(string.ascii_uppercase + string.digits, k=length))
+    return "".join(
+        random.choices(string.ascii_uppercase + string.digits, k=length)
+    )
 
 # ================== CLIENTS ==================
 bot = Client(
@@ -36,7 +38,7 @@ userbot = Client(
     session_string=SESSION_STRING
 )
 
-# ================== DEBUG (VERY IMPORTANT) ==================
+# ================== DEBUG HANDLER ==================
 @userbot.on_message(filters.all)
 async def debug_everything(client: Client, message: Message):
     print(
@@ -47,11 +49,11 @@ async def debug_everything(client: Client, message: Message):
         "media:", bool(message.media)
     )
 
-# ================== CAPTURE POSTS ==================
+# ================== CAPTURE PRIVATE POSTS ==================
 @userbot.on_message(filters.channel | filters.group)
 async def capture_post(client: Client, message: Message):
     try:
-        # ignore empty service messages
+        # ignore service / empty messages
         if not message.text and not message.media:
             return
 
@@ -68,18 +70,21 @@ async def capture_post(client: Client, message: Message):
             disable_web_page_preview=True
         )
 
-        print(f"CAPTURED POST -> chat:{message.chat.id} msg:{message.id} code:{code}")
+        print(
+            f"CAPTURED POST -> chat:{message.chat.id} "
+            f"msg:{message.id} code:{code}"
+        )
 
     except Exception as e:
         print("CAPTURE ERROR:", e)
 
-# ================== START HANDLER ==================
+# ================== START COMMAND ==================
 @bot.on_message(filters.private & filters.command("start"))
 async def start_handler(client: Client, message: Message):
     if len(message.command) < 2:
         await message.reply_text(
             "👋 Bot active hai.\n\n"
-            "Agar aapke paas valid link hai, us par tap karke aaiye."
+            "Agar aapke paas valid link hai, us par tap karein."
         )
         return
 
@@ -98,23 +103,19 @@ async def start_handler(client: Client, message: Message):
             message_id=msg_id
         )
 
-        # auto delete after 5 minutes (optional)
+        # auto delete after 5 minutes
         await asyncio.sleep(300)
         await sent.delete()
 
     except Exception as e:
-        await message.reply_text("❌ Post send nahi ho paayi.")
         print("SEND ERROR:", e)
+        await message.reply_text("❌ Post send nahi ho paayi.")
 
-# ================== MAIN ==================
-async def main():
-    await bot.start()
-    await userbot.start()
-    print("🚀 Bot + Userbot running (FINAL)")
-    await idle()
-    await bot.stop()
-    await userbot.stop()
-
+# ================== MAIN (FIXED) ==================
 if __name__ == "__main__":
-    asyncio.run(main())
-
+    bot.start()
+    userbot.start()
+    print("🚀 Bot + Userbot running (FINAL)")
+    idle()
+    bot.stop()
+    userbot.stop()
