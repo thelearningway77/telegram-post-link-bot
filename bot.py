@@ -1,14 +1,26 @@
 import os
 import asyncio
-import uuid
-from pyrogram import Client, filters
+import string
+import random
+
+from pyrogram import Client, filters, idle
 from pyrogram.types import Message
 
-# ===== ENV =====
+# ===== ENV VARIABLES =====
 API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 SESSION_STRING = os.environ["SESSION_STRING"]
+OWNER_ID = int(os.environ["OWNER_ID"])
+BOT_USERNAME = os.environ["BOT_USERNAME"]
+
+# ===== STORAGE (MEMORY) =====
+POST_MAP = {}  # code -> (chat_id, message_id)
+
+# ===== HELPERS =====
+def generate_code(length=8):
+    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
+
 
 # ===== CLIENTS =====
 bot = Client(
@@ -18,65 +30,84 @@ bot = Client(
     bot_token=BOT_TOKEN
 )
 
-user = Client(
-    "user",
+userbot = Client(
+    "userbot",
     api_id=API_ID,
     api_hash=API_HASH,
     session_string=SESSION_STRING
 )
 
-# ===== STORAGE (in-memory for now) =====
-POST_MAP = {}   # code -> (chat_id, message_id)
+# ===== USERBOT: CAPTURE PRIVATE POSTS =====
+@userbot.on_message(filters.group | filters.channel)
+async def capture_post(client: Client, message: Message):
+    try:
+        if message.from_user and message.from_user.is_bot:
+            return
 
-# ===== USERBOT: LISTEN PRIVATE GROUPS =====
-@user.on_message(filters.group | filters.channel)
-async def capture_posts(_, msg: Message):
-    # sirf text / media posts
-    if not (msg.text or msg.caption or msg.media):
-        return
+        if not message.text and not message.media:
+            return
 
-    code = uuid.uuid4().hex[:8]
-    POST_MAP[code] = (msg.chat.id, msg.id)
+        code = generate_code()
+        POST_MAP[code] = (message.chat.id, message.id)
 
-    print(f"Captured post {msg.chat.id}/{msg.id} -> code={code}")
+        link = f"https://t.me/{BOT_USERNAME}?start={code}"
 
-# ===== BOT: USER REQUEST =====
-@bot.on_message(filters.private & filters.command("get"))
-async def get_post(_, message: Message):
-    # /get CODE
-    if len(message.command) != 2:
-        await message.reply("Usage: /get CODE")
+        await bot.send_message(
+            OWNER_ID,
+            f"✅ New private post captured\n\n"
+            f"🔑 Code: `{code}`\n"
+            f"🔗 Link: {link}",
+            disable_web_page_preview=True
+        )
+
+        print(f"Captured post {message.chat.id}/{message.id} -> {code}")
+
+    except Exception as e:
+        print("Capture error:", e)
+
+
+# ===== BOT: START HANDLER =====
+@bot.on_message(filters.private & filters.command("start"))
+async def start_handler(client: Client, message: Message):
+    if len(message.command) < 2:
+        await message.reply_text(
+            "👋 Bot active hai.\n\n"
+            "Agar aapke paas valid link hai, us par tap karke aaiye."
+        )
         return
 
     code = message.command[1]
+
     if code not in POST_MAP:
-        await message.reply("❌ Invalid or expired code")
+        await message.reply_text("❌ Invalid ya expired link.")
         return
 
     chat_id, msg_id = POST_MAP[code]
 
-    # userbot se copy bhejo (forward nahi)
-    sent = await user.copy_message(
-        chat_id=message.chat.id,
-        from_chat_id=chat_id,
-        message_id=msg_id
-    )
-
-    await message.reply("⏳ This message will auto-delete in 5 minutes")
-
-    # 5 minutes baad delete
-    await asyncio.sleep(300)
     try:
-        await sent.delete()
-    except:
-        pass
+        sent = await userbot.copy_message(
+            chat_id=message.chat.id,
+            from_chat_id=chat_id,
+            message_id=msg_id
+        )
 
-# ===== START =====
+        # OPTIONAL: auto delete after 5 minutes
+        await asyncio.sleep(300)
+        await sent.delete()
+
+    except Exception as e:
+        await message.reply_text("❌ Post send nahi ho paayi.")
+        print("Send error:", e)
+
+
+# ===== MAIN =====
 async def main():
-    await user.start()
     await bot.start()
+    await userbot.start()
     print("🚀 Bot + Userbot running")
-    await asyncio.Event().wait()
+    await idle()
+    await bot.stop()
+    await userbot.stop()
 
 if __name__ == "__main__":
     asyncio.run(main())
