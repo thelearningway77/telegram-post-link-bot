@@ -1,107 +1,94 @@
 import os
-import random
-import string
 import asyncio
-import tempfile
+import logging
+from pyrogram import Client, filters
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-from pyrogram import Client, filters, idle
-from pyrogram.types import Message
+# ---------------- LOGGING ----------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+log = logging.getLogger(__name__)
 
-# ========= ENV =========
-API_ID = int(os.environ["API_ID"])
-API_HASH = os.environ["API_HASH"]
-BOT_TOKEN = os.environ["BOT_TOKEN"]
-SESSION_STRING = os.environ["SESSION_STRING"]
-OWNER_ID = int(os.environ["OWNER_ID"])
-BOT_USERNAME = os.environ["BOT_USERNAME"]  # without @
+# ---------------- ENV ----------------
+API_ID = int(os.getenv("API_ID"))
+API_HASH = os.getenv("API_HASH")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# ========= MEMORY =========
-POSTS = {}   # code -> (chat_id, message_id)
+SOURCE_CHAT_ID = int(os.getenv("SOURCE_CHAT_ID"))  # private channel/group id
+DELETE_TIME = 300  # 5 minutes
 
-def gen_code():
-    return "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
-
-# ========= CLIENTS =========
+# ---------------- BOT ----------------
 bot = Client(
-    "bot",
+    "link-bot",
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN
 )
 
-userbot = Client(
-    "userbot",
-    api_id=API_ID,
-    api_hash=API_HASH,
-    session_string=SESSION_STRING
-)
-
-# ========= CAPTURE CHANNEL POSTS =========
-@userbot.on_message(filters.channel & ~filters.service)
-async def capture(client: Client, message: Message):
-    code = gen_code()
-    POSTS[code] = (message.chat.id, message.id)
-
-    link = f"https://t.me/{BOT_USERNAME}?start={code}"
-
-    await bot.send_message(
-        OWNER_ID,
-        f"✅ New Post Captured\n\n"
-        f"🔑 Code: `{code}`\n"
-        f"🔗 {link}",
-        disable_web_page_preview=True
+# ---------------- START ----------------
+@bot.on_message(filters.command("start"))
+async def start_handler(client, message):
+    await message.reply_text(
+        "🤖 Bot running!\n\nSend /get <message_id>"
     )
 
-    print(f"CAPTURED -> {code}")
-
-# ========= USER START =========
-@bot.on_message(filters.private & filters.command("start"))
-async def start(client: Client, message: Message):
-    if len(message.command) < 2:
-        await message.reply_text(
-            "👋 Bot active hai.\n\n"
-            "Valid link par tap karke post milegi.\n"
-            "⚠️ Post 5 minute baad delete ho jayegi."
-        )
-        return
-
-    code = message.command[1]
-
-    if code not in POSTS:
-        await message.reply_text("❌ Invalid / expired link.")
-        return
-
-    chat_id, msg_id = POSTS[code]
-
+# ---------------- GET POST ----------------
+@bot.on_message(filters.command("get"))
+async def get_post(client, message):
     try:
-        with tempfile.TemporaryDirectory() as tmp:
-            file_path = await userbot.download_media(
-                chat_id=chat_id,
-                message_id=msg_id,
-                file_name=tmp
+        if len(message.command) != 2:
+            await message.reply_text("Usage: /get <message_id>")
+            return
+
+        msg_id = int(message.command[1])
+        chat_id = message.chat.id
+
+        log.info(f"CAPTURED -> {msg_id}")
+
+        # fetch message from source
+        src_msg = await client.get_messages(SOURCE_CHAT_ID, msg_id)
+
+        # send to user
+        sent = await src_msg.copy(chat_id)
+
+        await message.reply_text(
+            f"✅ Post sent!\n🗑 Auto delete in 5 minutes",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("❌ Delete Now", callback_data=f"del_{sent.id}")]]
             )
+        )
 
-            src_msg = await userbot.get_messages(chat_id, msg_id)
-
-            sent = await bot.send_document(
-                chat_id=message.chat.id,
-                document=file_path,
-                caption=src_msg.caption or ""
-            )
-
-        # ⏱ AUTO DELETE TIMER (5 MIN)
-        await asyncio.sleep(300)
-        await sent.delete()
+        # auto delete after 5 min
+        asyncio.create_task(auto_delete(chat_id, sent.id))
 
     except Exception as e:
-        print("SEND ERROR:", e)
-        await message.reply_text("❌ Post send nahi ho paayi.")
+        log.error(f"SEND ERROR: {e}")
+        await message.reply_text("❌ Post not found or error occurred")
 
-# ========= RUN =========
+# ---------------- DELETE BUTTON ----------------
+@bot.on_callback_query(filters.regex("^del_"))
+async def delete_now(client, query):
+    msg_id = int(query.data.split("_")[1])
+    chat_id = query.message.chat.id
+
+    try:
+        await client.delete_messages(chat_id, msg_id)
+        await query.message.edit_text("🗑 Deleted manually")
+    except:
+        await query.answer("Already deleted", show_alert=True)
+
+# ---------------- AUTO DELETE ----------------
+async def auto_delete(chat_id, msg_id):
+    await asyncio.sleep(DELETE_TIME)
+    try:
+        await bot.delete_messages(chat_id, msg_id)
+        log.info(f"AUTO DELETED -> {msg_id}")
+    except:
+        pass
+
+# ---------------- RUN ----------------
 if __name__ == "__main__":
-    bot.start()
-    userbot.start()
-    print("🚀 FINAL BOT RUNNING (DOWNLOAD MODE)")
-    idle()
-    bot.stop()
-    userbot.stop()
+    log.info("🚀 FINAL BOT RUNNING")
+    bot.run()
